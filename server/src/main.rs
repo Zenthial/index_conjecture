@@ -51,18 +51,19 @@ async fn write_new_remaining(db: Arc<Connection>) -> i64 {
 
     let max_row = stats_rows.next().unwrap().unwrap();
     let max = max_row.get::<i64>(1).unwrap();
-    let new_max = max * 2;
+    let new_max = max + 500;
 
     let new_domain = domain(max, new_max).await;
 
-    let mut stmt = db.prepare("INSERT INTO remaining VALUES ?1").await.unwrap();
+    let mut many_insert = String::from("INSERT INTO remaining(num) VALUES ");
 
-    let mut remaining = Vec::new();
     for num in &new_domain[1..] {
-        remaining.push(*num);
+        many_insert += &format!("({}), ", *num);
     }
 
-    stmt.execute(remaining).await.unwrap();
+    let mut query = String::from(many_insert.strip_suffix(", ").unwrap());
+    query += ";";
+    db.execute(query.as_str(), ()).await.unwrap();
 
     db.execute(
         "UPDATE stats SET VALUE = ?1 WHERE KEY = \"max\";",
@@ -93,7 +94,10 @@ async fn get_num(State(state): State<AppState>) -> impl IntoResponse {
     let row = match row_opt {
         Some(r) => r,
         None => {
-            let new_num = write_new_remaining(db).await;
+            let new_num = write_new_remaining(db.clone()).await;
+            db.execute("INSERT INTO processing(num) VALUES (?1);", [new_num])
+                .await
+                .unwrap();
             return (StatusCode::OK, new_num.to_string());
         }
     };
