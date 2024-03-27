@@ -5,9 +5,11 @@ edition = "2021"
 
 [dependencies]
 axum = "0.7.4"
-libsql-client = "0.33.4"
+libsql = "^0.2.0"
+num = "0.4.1"
+rayon = "1.10.0"
+serde = "1.0.197"
 shuttle-axum = "0.42.0"
 shuttle-runtime = "0.42.0"
-shuttle-secrets = "0.42.0"
 shuttle-turso = "0.42.1"
 tokio = "1.28.2"
