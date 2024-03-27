@@ -51,7 +51,7 @@ async fn write_new_remaining(db: Arc<Connection>) -> i64 {
 
     let max_row = stats_rows.next().unwrap().unwrap();
     let max = max_row.get::<i64>(1).unwrap();
-    let new_max = max + 500;
+    let new_max = max + 50_000;
 
     let new_domain = domain(max, new_max).await;
 
