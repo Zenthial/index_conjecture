@@ -83,7 +83,9 @@ fn main() {
 
         match text.parse() {
             Ok(i) => {
+                println!("processing {i}");
                 big_check(i);
+                println!("checked {i}");
                 let _ = blocking_client.post(URL).json(&Processed { num: i }).send();
             }
             Err(_) => break,
