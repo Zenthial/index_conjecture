@@ -2,6 +2,7 @@ use hashbrown::HashSet;
 use num::Integer;
 use rayon::prelude::*;
 use reqwest::blocking::Client;
+use serde::Serialize;
 
 fn w_index(s: [i64; 4], n: i64, coprimes: &[i64]) -> i64 {
     for g in coprimes {
@@ -67,7 +68,12 @@ fn big_check(n: i64) {
     })
 }
 
-const URL: &'static str = "some_url";
+const URL: &'static str = "https://idx-conj.shuttleapp.rs/num";
+
+#[derive(Serialize)]
+struct Processed {
+    num: i64,
+}
 
 fn main() {
     let blocking_client = Client::new();
@@ -78,7 +84,7 @@ fn main() {
         match text.parse() {
             Ok(i) => {
                 big_check(i);
-                let _ = blocking_client.post(URL).body(i.to_string()).send();
+                let _ = blocking_client.post(URL).json(&Processed { num: i }).send();
             }
             Err(_) => break,
         }

@@ -106,6 +106,7 @@ dependencies = [
  "num",
  "rayon",
  "reqwest",
+ "serde",
 ]
 
 [[package]]
