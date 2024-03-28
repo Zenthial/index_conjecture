@@ -1,8 +1,12 @@
 use hashbrown::HashSet;
 use num::Integer;
+use rand::prelude::*;
 use rayon::prelude::*;
 use reqwest::blocking::Client;
 use serde::Serialize;
+
+use std::thread;
+use std::time::Duration;
 
 fn w_index(s: [i64; 4], n: i64, coprimes: &[i64]) -> i64 {
     for g in coprimes {
@@ -78,6 +82,10 @@ struct Processed {
 fn main() {
     let blocking_client = Client::new();
     loop {
+        let mut rand = rand::thread_rng();
+        let wait = (rand.gen::<f64>() + 1.0) * 5.0;
+        thread::sleep(Duration::from_secs_f64(wait));
+
         let response = blocking_client.get(URL).send().unwrap();
         let text = response.text().unwrap();
 
