@@ -1,12 +1,10 @@
 use hashbrown::HashSet;
 use num::Integer;
-use rand::prelude::*;
 use rayon::prelude::*;
-use serde::Serialize;
 
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{ErrorKind, Read, Write};
+use std::io::ErrorKind;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -77,120 +75,132 @@ fn big_check(n: i64) {
 
 const DIR_PATH: &'static str = "/sciclone/scr-lst/ajpendleton";
 
-fn get_remaining_num() -> Option<i64> {
-    let path_str = format!("{DIR_PATH}/remaining.lock");
-    let remaining_path = Path::new(&path_str);
-    if !remaining_path.exists() {
-        return None;
+enum Reason {
+    NoneLeft,
+    Retry,
+}
+
+fn retrieve_lock(path_str: &str) -> Result<fs::File, Reason> {
+    let remaining_path = Path::new(path_str);
+    if remaining_path.exists() {
+        return Err(Reason::Retry);
     }
 
-    let _lock_file = match fs::OpenOptions::new().create_new(true).open(&path_str) {
+    let _lock_file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path_str)
+    {
         Ok(f) => f,
         Err(e) => {
             match e.kind() {
                 ErrorKind::AlreadyExists => (),
                 _ => eprintln!("unexpected file open error {}", e.to_string()),
             };
-            return None;
+            return Err(Reason::Retry);
         }
     };
 
-    let mut remaining_file = fs::OpenOptions::new()
-        .write(true)
-        .append(false)
-        .read(true)
-        .open(&format!("{DIR_PATH}/remaining"))
-        .unwrap();
+    Ok(_lock_file)
+}
 
-    let mut content = String::new();
-    match remaining_file.read_to_string(&mut content) {
-        Ok(_) => (),
-        Err(e) => {
-            eprintln!("Error reading file: {}", e);
-            return None;
-        }
-    };
+fn get_remaining_num() -> Result<i64, Reason> {
+    let path_str = format!("{DIR_PATH}/remaining.ron.lock");
+    let _ = retrieve_lock(&path_str)?;
+
+    let remaining_file_name = format!("{DIR_PATH}/remaining.ron");
+    let content = fs::read_to_string(&remaining_file_name).unwrap();
 
     let mut queue: VecDeque<i64> = ron::from_str(&content).unwrap();
     let num = match queue.pop_front() {
         Some(i) => i,
-        None => return None,
+        None => {
+            fs::remove_file(&path_str).unwrap();
+            return Err(Reason::NoneLeft);
+        }
     };
 
     let queue_str = ron::to_string(&queue).unwrap();
-    remaining_file.write_all(queue_str.as_bytes()).unwrap();
+    fs::write(&remaining_file_name, queue_str).unwrap();
     fs::remove_file(&path_str).unwrap();
 
-    Some(num)
+    Ok(num)
 }
 
 fn write_to_vec(file_name: &str, num: i64) {
-    let mut rand = rand::thread_rng();
-
     loop {
         let path_str = format!("{DIR_PATH}/{file_name}.lock");
-        let remaining_path = Path::new(&path_str);
-        if !remaining_path.exists() {
-            let wait = rand.gen::<f64>() + 0.1;
-            thread::sleep(Duration::from_secs_f64(wait));
-            continue;
-        }
-
-        let _lock_file = match fs::OpenOptions::new().create_new(true).open(&path_str) {
-            Ok(f) => f,
-            Err(e) => {
-                match e.kind() {
-                    ErrorKind::AlreadyExists => (),
-                    _ => panic!("unexpected file open error {}", e.to_string()),
-                };
-
-                let wait = rand.gen::<f64>() + 0.1;
-                thread::sleep(Duration::from_secs_f64(wait));
-                continue;
-            }
+        match retrieve_lock(&path_str) {
+            Err(e) => match e {
+                Reason::Retry => {
+                    thread::sleep(Duration::from_secs_f64(0.1));
+                    continue;
+                }
+                _ => unreachable!(),
+            },
+            Ok(_) => {}
         };
 
-        let mut remaining_file = fs::OpenOptions::new()
-            .write(true)
-            .append(false)
-            .read(true)
-            .open(&format!("{DIR_PATH}/remaining"))
-            .unwrap();
-
-        let mut content = String::new();
-        match remaining_file.read_to_string(&mut content) {
-            Ok(_) => (),
-            Err(e) => {
-                panic!("Error reading file: {}", e);
-            }
-        };
+        let vec_file_name = format!("{DIR_PATH}/{file_name}");
+        let content = fs::read_to_string(&vec_file_name).unwrap();
 
         let mut vec: Vec<i64> = ron::from_str(&content).unwrap();
         vec.push(num);
 
         let vec_str = ron::to_string(&vec).unwrap();
-        remaining_file.write_all(vec_str.as_bytes()).unwrap();
+        fs::write(&vec_file_name, vec_str).unwrap();
+        // write!(vec_file, "{vec_str}").unwrap();
+        fs::remove_file(&path_str).unwrap();
+        break;
+    }
+}
+
+fn remove_from_vec(file_name: &str, num: i64) {
+    loop {
+        let path_str = format!("{DIR_PATH}/{file_name}.lock");
+        match retrieve_lock(&path_str) {
+            Err(e) => match e {
+                Reason::Retry => {
+                    thread::sleep(Duration::from_secs_f64(0.1));
+                    continue;
+                }
+                _ => unreachable!(),
+            },
+            Ok(_) => {}
+        };
+
+        let vec_file_name = format!("{DIR_PATH}/{file_name}");
+        let content = fs::read_to_string(&vec_file_name).unwrap();
+
+        let mut vec: Vec<i64> = ron::from_str(&content).unwrap();
+        vec = vec.into_par_iter().filter(|&i| i != num).collect();
+
+        let vec_str = ron::to_string(&vec).unwrap();
+        fs::write(&vec_file_name, vec_str).unwrap();
+        // write!(vec_file, "{vec_str}").unwrap();
         fs::remove_file(&path_str).unwrap();
         break;
     }
 }
 
 fn main() {
-    let mut rand = rand::thread_rng();
-
     loop {
-        let wait = (rand.gen::<f64>() + 1.0) * 5.0;
-        thread::sleep(Duration::from_secs_f64(wait));
-
+        thread::sleep(Duration::from_secs_f64(0.1));
         let i = match get_remaining_num() {
-            Some(i) => i,
-            None => continue,
+            Ok(i) => i,
+            Err(e) => match e {
+                Reason::Retry => continue,
+                Reason::NoneLeft => break,
+            },
         };
 
-        write_to_vec("processing", i);
+        write_to_vec("processing.ron", i);
         println!("processing {i}");
         big_check(i);
-        write_to_vec("processed", i);
+        remove_from_vec("processing.ron", i);
+        write_to_vec("processed.ron", i);
         println!("checked {i}");
     }
+
+    println!("no more remaining numbers");
 }
