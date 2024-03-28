@@ -2,9 +2,12 @@ use hashbrown::HashSet;
 use num::Integer;
 use rand::prelude::*;
 use rayon::prelude::*;
-use reqwest::blocking::Client;
 use serde::Serialize;
 
+use std::collections::VecDeque;
+use std::fs;
+use std::io::{ErrorKind, Read, Write};
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
@@ -72,31 +75,122 @@ fn big_check(n: i64) {
     })
 }
 
-const URL: &'static str = "https://idx-conj.shuttleapp.rs/num";
+const DIR_PATH: &'static str = "/sciclone/scr-lst/ajpendleton";
 
-#[derive(Serialize)]
-struct Processed {
-    num: i64,
+fn get_remaining_num() -> Option<i64> {
+    let path_str = format!("{DIR_PATH}/remaining.lock");
+    let remaining_path = Path::new(&path_str);
+    if !remaining_path.exists() {
+        return None;
+    }
+
+    let _lock_file = match fs::OpenOptions::new().create_new(true).open(&path_str) {
+        Ok(f) => f,
+        Err(e) => {
+            match e.kind() {
+                ErrorKind::AlreadyExists => (),
+                _ => eprintln!("unexpected file open error {}", e.to_string()),
+            };
+            return None;
+        }
+    };
+
+    let mut remaining_file = fs::OpenOptions::new()
+        .write(true)
+        .append(false)
+        .read(true)
+        .open(&format!("{DIR_PATH}/remaining"))
+        .unwrap();
+
+    let mut content = String::new();
+    match remaining_file.read_to_string(&mut content) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error reading file: {}", e);
+            return None;
+        }
+    };
+
+    let mut queue: VecDeque<i64> = ron::from_str(&content).unwrap();
+    let num = match queue.pop_front() {
+        Some(i) => i,
+        None => return None,
+    };
+
+    let queue_str = ron::to_string(&queue).unwrap();
+    remaining_file.write_all(queue_str.as_bytes()).unwrap();
+    fs::remove_file(&path_str).unwrap();
+
+    Some(num)
+}
+
+fn write_to_vec(file_name: &str, num: i64) {
+    let mut rand = rand::thread_rng();
+
+    loop {
+        let path_str = format!("{DIR_PATH}/{file_name}.lock");
+        let remaining_path = Path::new(&path_str);
+        if !remaining_path.exists() {
+            let wait = rand.gen::<f64>() + 0.1;
+            thread::sleep(Duration::from_secs_f64(wait));
+            continue;
+        }
+
+        let _lock_file = match fs::OpenOptions::new().create_new(true).open(&path_str) {
+            Ok(f) => f,
+            Err(e) => {
+                match e.kind() {
+                    ErrorKind::AlreadyExists => (),
+                    _ => panic!("unexpected file open error {}", e.to_string()),
+                };
+
+                let wait = rand.gen::<f64>() + 0.1;
+                thread::sleep(Duration::from_secs_f64(wait));
+                continue;
+            }
+        };
+
+        let mut remaining_file = fs::OpenOptions::new()
+            .write(true)
+            .append(false)
+            .read(true)
+            .open(&format!("{DIR_PATH}/remaining"))
+            .unwrap();
+
+        let mut content = String::new();
+        match remaining_file.read_to_string(&mut content) {
+            Ok(_) => (),
+            Err(e) => {
+                panic!("Error reading file: {}", e);
+            }
+        };
+
+        let mut vec: Vec<i64> = ron::from_str(&content).unwrap();
+        vec.push(num);
+
+        let vec_str = ron::to_string(&vec).unwrap();
+        remaining_file.write_all(vec_str.as_bytes()).unwrap();
+        fs::remove_file(&path_str).unwrap();
+        break;
+    }
 }
 
 fn main() {
-    let blocking_client = Client::new();
+    let mut rand = rand::thread_rng();
+
     loop {
-        let mut rand = rand::thread_rng();
         let wait = (rand.gen::<f64>() + 1.0) * 5.0;
         thread::sleep(Duration::from_secs_f64(wait));
 
-        let response = blocking_client.get(URL).send().unwrap();
-        let text = response.text().unwrap();
+        let i = match get_remaining_num() {
+            Some(i) => i,
+            None => continue,
+        };
 
-        match text.parse() {
-            Ok(i) => {
-                println!("processing {i}");
-                big_check(i);
-                println!("checked {i}");
-                let _ = blocking_client.post(URL).json(&Processed { num: i }).send();
-            }
-            Err(_) => break,
-        }
+        write_to_vec("processing", i);
+        println!("processing {i}");
+        big_check(i);
+        write_to_vec("processed", i);
+        println!("checked {i}");
     }
 }
