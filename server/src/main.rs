@@ -2,16 +2,17 @@ use axum::{
     extract::{Json, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use libsql::{de, Connection};
 use num::Integer;
 use rayon::prelude::*;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 #[derive(Clone)]
 struct AppState {
@@ -75,6 +76,8 @@ async fn write_new_remaining(db: Arc<Connection>) {
     db.execute("UPDATE stats SET VALUE = ?1 WHERE KEY = \"min\";", [max])
         .await
         .unwrap();
+
+    println!("filled remaining table");
 }
 
 async fn fill_queue(db: Arc<Connection>, queue: Arc<Mutex<VecDeque<(i32, i64)>>>) {
@@ -97,24 +100,26 @@ async fn fill_queue(db: Arc<Connection>, queue: Arc<Mutex<VecDeque<(i32, i64)>>>
 
     let mut remaining_row = remaining_rows.next().unwrap();
 
-    let mut q = queue.lock().unwrap();
+    let mut q = queue.lock().await;
 
     while let Some(row) = remaining_row {
         let r = de::from_row::<Remaining>(&row).unwrap();
         q.push_back((r.id, r.num));
         remaining_row = remaining_rows.next().unwrap();
     }
+
+    println!("queue filled: {:?}", q);
 }
 
-async fn get_num(State(state): State<AppState>) -> (StatusCode, String) {
-    let db = state.db;
+async fn get_num(State(state): State<AppState>) -> impl IntoResponse {
+    let db = state.db.clone();
 
-    let mut queue = state.queue.lock().unwrap();
+    let mut queue = state.queue.lock().await;
     if queue.len() == 0 {
         drop(queue);
 
         fill_queue(db.clone(), state.queue.clone()).await;
-        queue = state.queue.lock().unwrap();
+        queue = state.queue.lock().await;
     }
 
     let (id, num) = queue.pop_front().unwrap();
@@ -156,7 +161,7 @@ async fn main(
     )]
     client: Connection,
 ) -> shuttle_axum::ShuttleAxum {
-    let mut queue = VecDeque::new();
+    let queue = VecDeque::new();
 
     let state = AppState {
         db: Arc::new(client),
@@ -164,7 +169,8 @@ async fn main(
     };
 
     let router = Router::new()
-        .route("/num", get(get_num).post(process_num))
+        .route("/num", get(get_num))
+        .route("/num", post(process_num))
         .with_state(state);
 
     Ok(router.into())
