@@ -17,7 +17,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 struct AppState {
     db: Arc<Connection>,
-    queue: Arc<Mutex<VecDeque<(i32, i64)>>>,
+    queue: Arc<Mutex<Box<VecDeque<(i32, i64)>>>>,
 }
 
 #[derive(Deserialize)]
@@ -80,7 +80,7 @@ async fn write_new_remaining(db: Arc<Connection>) {
     println!("filled remaining table");
 }
 
-async fn fill_queue(db: Arc<Connection>, queue: Arc<Mutex<VecDeque<(i32, i64)>>>) {
+async fn fill_queue(db: Arc<Connection>, queue: Arc<Mutex<Box<VecDeque<(i32, i64)>>>>) {
     let count = db
         .query("SELECT COUNT(*) FROM remaining;", ())
         .await
@@ -165,7 +165,7 @@ async fn main(
 
     let state = AppState {
         db: Arc::new(client),
-        queue: Arc::new(Mutex::new(queue)),
+        queue: Arc::new(Mutex::new(Box::new(queue))),
     };
 
     let router = Router::new()
