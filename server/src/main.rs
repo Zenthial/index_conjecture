@@ -9,13 +9,14 @@ use libsql::{de, Connection};
 use num::Integer;
 use rayon::prelude::*;
 use serde::Deserialize;
-// use shuttle_runtime::{SecretStore, Secrets};
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Clone)]
 struct AppState {
     db: Arc<Connection>,
+    queue: Arc<Mutex<VecDeque<(i32, i64)>>>,
 }
 
 #[derive(Deserialize)]
@@ -43,7 +44,7 @@ async fn domain(n: i64, m: i64) -> Vec<i64> {
         .collect()
 }
 
-async fn write_new_remaining(db: Arc<Connection>) -> i64 {
+async fn write_new_remaining(db: Arc<Connection>) {
     let mut stats_rows = db
         .query("SELECT * FROM stats WHERE KEY = 'max';", ())
         .await
@@ -57,8 +58,8 @@ async fn write_new_remaining(db: Arc<Connection>) -> i64 {
 
     let mut many_insert = String::from("INSERT INTO remaining(num) VALUES ");
 
-    for num in &new_domain[1..] {
-        many_insert += &format!("({}), ", *num);
+    for num in new_domain {
+        many_insert += &format!("({}), ", num);
     }
 
     let mut query = String::from(many_insert.strip_suffix(", ").unwrap());
@@ -74,45 +75,59 @@ async fn write_new_remaining(db: Arc<Connection>) -> i64 {
     db.execute("UPDATE stats SET VALUE = ?1 WHERE KEY = \"min\";", [max])
         .await
         .unwrap();
-
-    return new_domain[0];
 }
 
-async fn get_num(State(state): State<AppState>) -> impl IntoResponse {
-    let db = state.db;
-
-    let row_opt = db
-        .query(
-            "SELECT * FROM remaining WHERE ID = (SELECT MIN(ID) FROM remaining);",
-            (),
-        )
+async fn fill_queue(db: Arc<Connection>, queue: Arc<Mutex<VecDeque<(i32, i64)>>>) {
+    let count = db
+        .query("SELECT COUNT(*) FROM remaining;", ())
         .await
         .unwrap()
         .next()
+        .unwrap()
         .unwrap();
 
-    let row = match row_opt {
-        Some(r) => r,
-        None => {
-            let new_num = write_new_remaining(db.clone()).await;
-            db.execute("INSERT INTO processing(num) VALUES (?1);", [new_num])
-                .await
-                .unwrap();
-            return (StatusCode::OK, new_num.to_string());
-        }
-    };
+    if count.get::<i32>(0).unwrap() == 0 {
+        write_new_remaining(db.clone()).await;
+    }
 
-    let info = de::from_row::<Remaining>(&row).unwrap();
-
-    db.execute("INSERT INTO processing(num) VALUES (?1);", [info.num])
+    let mut remaining_rows = db
+        .query("SELECT * FROM remaining LIMIT 100;", ())
         .await
         .unwrap();
 
-    db.execute("DELETE FROM remaining WHERE ID = ?1;", [info.id])
+    let mut remaining_row = remaining_rows.next().unwrap();
+
+    let mut q = queue.lock().unwrap();
+
+    while let Some(row) = remaining_row {
+        let r = de::from_row::<Remaining>(&row).unwrap();
+        q.push_back((r.id, r.num));
+        remaining_row = remaining_rows.next().unwrap();
+    }
+}
+
+async fn get_num(State(state): State<AppState>) -> (StatusCode, String) {
+    let db = state.db;
+
+    let mut queue = state.queue.lock().unwrap();
+    if queue.len() == 0 {
+        drop(queue);
+
+        fill_queue(db.clone(), state.queue.clone()).await;
+        queue = state.queue.lock().unwrap();
+    }
+
+    let (id, num) = queue.pop_front().unwrap();
+
+    db.execute("INSERT INTO processing(num) VALUES (?1);", [num])
         .await
         .unwrap();
 
-    (StatusCode::OK, info.num.to_string())
+    db.execute("DELETE FROM remaining WHERE ID = ?1;", [id])
+        .await
+        .unwrap();
+
+    (StatusCode::OK, num.to_string())
 }
 
 async fn process_num(
@@ -141,8 +156,11 @@ async fn main(
     )]
     client: Connection,
 ) -> shuttle_axum::ShuttleAxum {
+    let mut queue = VecDeque::new();
+
     let state = AppState {
         db: Arc::new(client),
+        queue: Arc::new(Mutex::new(queue)),
     };
 
     let router = Router::new()
