@@ -73,12 +73,32 @@ fn big_check(n: i64) {
     })
 }
 
+// fn domain(n: i64, m: i64) -> Vec<i64> {
+//     (n..m)
+//         .into_par_iter()
+//         .filter(|&i| {
+//             if (i.gcd(&6) == 1) & (i % 5 == 0) {
+//                 return true;
+//             }
+//
+//             false
+//         })
+//         .collect()
+// }
+
 const DIR_PATH: &'static str = "/sciclone/scr-lst/ajpendleton";
 
 enum Reason {
     NoneLeft,
     Retry,
 }
+
+// fn fill_queue() {
+//     let curr_int_ron = fs::read_to_string(&format!("{DIR_PATH}/current_min.ron")).unwrap();
+//     let curr_int: i64 = ron::from_str(&curr_int_ron).unwrap();
+//
+//     let new_domain =
+// }
 
 fn retrieve_lock(path_str: &str) -> Result<fs::File, Reason> {
     let remaining_path = Path::new(path_str);
